@@ -1,0 +1,10 @@
+[Details]
+Name = "Ferry"
+Icon = "img/Icon.png"
+ID = "com.fyshos.ferry"
+
+[LinuxAndBSD]
+Categories = ["System"]
+
+[Migrations]
+fyneDo = true
