@@ -42,11 +42,11 @@ func TestDDProgressParsing(t *testing.T) {
 	}
 }
 
-// TestParseWriteStderrPhases feeds a full script stderr stream - phase markers
+// TestParseWriteProgressPhases feeds a full script stderr stream - phase markers
 // interleaved with dd's progress for both the write and the read-back - and
 // checks each stage restarts the progress bar rather than leaving it pinned at
 // 100% from the previous stage.
-func TestParseWriteStderrPhases(t *testing.T) {
+func TestParseWriteProgressPhases(t *testing.T) {
 	const size = 1000
 	stream := "FERRY-PHASE writing\n" +
 		"\r250 bytes (250 B) copied, 1 s, 250 B/s" +
@@ -60,7 +60,7 @@ func TestParseWriteStderrPhases(t *testing.T) {
 		"FERRY-PHASE ejecting\n"
 
 	var got []WriteProgress
-	parseWriteStderr(strings.NewReader(stream), size, func(p WriteProgress) {
+	parseWriteProgress(strings.NewReader(stream), size, func(p WriteProgress) {
 		got = append(got, p)
 	})
 
@@ -104,14 +104,14 @@ func TestParseWriteStderrPhases(t *testing.T) {
 	}
 }
 
-// TestParseWriteStderrClampsOvershoot covers dd's read-back reporting a final
+// TestParseWriteProgressClampsOvershoot covers dd's read-back reporting a final
 // block that runs past the image size.
-func TestParseWriteStderrClampsOvershoot(t *testing.T) {
+func TestParseWriteProgressClampsOvershoot(t *testing.T) {
 	const size = 1000
 	stream := "FERRY-PHASE verifying\n\r1048576 bytes (1.0 MB) copied, 1 s, 1 MB/s\n"
 
 	var max int64
-	parseWriteStderr(strings.NewReader(stream), size, func(p WriteProgress) {
+	parseWriteProgress(strings.NewReader(stream), size, func(p WriteProgress) {
 		if p.Bytes > max {
 			max = p.Bytes
 		}
@@ -132,5 +132,48 @@ func TestSHALineRegex(t *testing.T) {
 	}
 	if shaLine.MatchString("SHA256 nothex") {
 		t.Error("shaLine should not match non-hex content")
+	}
+}
+
+// TestScriptErrorCombinesStageAndDetail covers the message a failed write
+// produces: the elevation helpers give no usable stderr of their own, so the
+// script's own lines are all the user has to go on.
+func TestScriptErrorCombinesStageAndDetail(t *testing.T) {
+	diags := []string{
+		"FERRY-NOTE unmountDisk exited 1",
+		"dd: /dev/rdisk20: Resource busy",
+		"FERRY-ERROR could not write to /dev/rdisk20",
+	}
+	got := scriptError(diags)
+	want := "could not write to /dev/rdisk20: dd: /dev/rdisk20: Resource busy"
+	if got != want {
+		t.Errorf("scriptError = %q, want %q", got, want)
+	}
+}
+
+// A failure with no marker at all must still surface whatever was printed.
+func TestScriptErrorBareOutput(t *testing.T) {
+	if got := scriptError([]string{"sh: shasum: command not found"}); got != "sh: shasum: command not found" {
+		t.Errorf("scriptError = %q", got)
+	}
+}
+
+// Progress and checksum lines are not diagnostics and must not leak into an
+// error message.
+func TestParseWriteProgressSeparatesDiagnostics(t *testing.T) {
+	stream := "FERRY-PHASE writing\n" +
+		"2+0 records in\n2+0 records out\n" +
+		"8388608 bytes transferred in 0.002 secs (1 bytes/sec)\n" +
+		"dd: /dev/rdisk20: Permission denied\n" +
+		"SHA256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n" +
+		"FERRY-ERROR could not write to /dev/rdisk20\n"
+
+	diags := parseWriteProgress(strings.NewReader(stream), 8388608, func(WriteProgress) {})
+	if len(diags) != 2 {
+		t.Fatalf("diags = %v, want the dd error and the stage error only", diags)
+	}
+	want := "could not write to /dev/rdisk20: dd: /dev/rdisk20: Permission denied"
+	if got := scriptError(diags); got != want {
+		t.Errorf("scriptError = %q, want %q", got, want)
 	}
 }

@@ -61,7 +61,7 @@ func TestWriteScriptEndToEnd(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		parseWriteStderr(stderr, size, func(p WriteProgress) { seen[p.Phase] = true })
+		parseWriteProgress(stderr, size, func(p WriteProgress) { seen[p.Phase] = true })
 	}()
 
 	var got string

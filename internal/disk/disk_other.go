@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package disk
 
@@ -9,7 +9,7 @@ import (
 
 // errUnsupported is returned by disk operations on platforms Ferry does not yet
 // know how to drive.
-var errUnsupported = errors.New("writing USB media is only supported on Linux")
+var errUnsupported = errors.New("writing USB media is only supported on Linux and macOS")
 
 // Enumerate is unsupported on this platform.
 func Enumerate() ([]Disk, error) { return nil, errUnsupported }

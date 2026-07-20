@@ -37,7 +37,7 @@ func nextButton(label string, enabled bool, onTap func()) *widget.Button {
 func (wz *Wizard) showArch() {
 	descs := map[releases.Arch]string{
 		releases.ArchAMD64: "Most PCs and laptops",
-		releases.ArchARM64: "Raspberry Pi and ARM boards",
+		releases.ArchARM64: "Recent macOS and Raspberry Pi boards",
 		releases.ArchI386:  "Older 32-bit PCs",
 	}
 
@@ -302,7 +302,7 @@ func (wz *Wizard) showConfirm() {
 	d := *wz.selDisk
 
 	summary := widget.NewRichTextFromMarkdown(fmt.Sprintf(
-		"**Image**\n\n%s\n\n**USB stick**\n\n%s  \n%s (%s)",
+		"**Image**\n\n%s\n\n**USB stick**\n\n%s  %s (%s)",
 		wz.selName, diskName(d), d.Path, disk.FormatSize(d.Size)))
 	summary.Wrapping = fyne.TextWrapWord
 

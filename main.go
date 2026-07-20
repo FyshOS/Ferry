@@ -20,7 +20,7 @@ func main() {
 	w := a.NewWindow("Ferry — FyshOS USB creator")
 	wiz := ui.NewWizard(a, w, icon)
 	w.SetContent(wiz.BuildUI())
-	w.Resize(fyne.NewSize(480, 480))
+	w.Resize(fyne.NewSize(480, 500))
 	wiz.Start()
 
 	w.ShowAndRun()

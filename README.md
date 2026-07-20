@@ -34,21 +34,25 @@ fyne install
 
 ## Requirements
 
-Writing to USB media is currently **Linux only** — Ferry builds on other platforms but
-will report that device writing is unsupported.
+Writing to USB media is supported on **Linux** and **macOS**. Ferry builds on other
+platforms but will report that device writing is unsupported.
 
 Ferry shells out to a few standard utilities, all present on a typical desktop install:
 
-| Tool | Used for |
-| --- | --- |
-| `lsblk` | listing removable devices |
-| `pkexec` | requesting administrator rights to write |
-| `dd`, `sync`, `blockdev` | writing and flushing the image |
-| `eject` or `udisksctl` | powering the device down when finished |
+| | Linux | macOS |
+| --- | --- | --- |
+| listing removable devices | `lsblk` | `diskutil`, `mount` |
+| requesting administrator rights | `pkexec` | `authopen` |
+| writing and flushing | `dd`, `sync`, `blockdev` | done in-process |
+| verifying | `sha256sum` | done in-process |
+| finishing up | `eject` or `udisksctl` | `diskutil eject` |
 
-`pkexec` needs a polkit authentication agent running in your desktop session. Most
-desktops start one automatically; if the authorisation prompt never appears, that agent
-is the thing to check.
+On Linux, `pkexec` needs a polkit authentication agent running in your desktop session.
+Most desktops start one automatically; if the authorisation prompt never appears, that
+agent is the thing to check.
+
+On macOS Ferry works from an ordinary non-administrator account. The privileged step is
+only the *open*: `/usr/libexec/authopen` presents the system authorization dialog for writing.
 
 ## How it works
 
@@ -63,10 +67,16 @@ Downloads land in the application cache directory and are written to a `.part` f
 is only renamed into place on success, so an interrupted download never masquerades as a
 complete image.
 
-The write itself runs as a single privileged shell script under `pkexec`: it unmounts any
-mounted partitions, `dd`s the image across, flushes the device's buffer cache, reads back
-exactly as many bytes as the image is long, and compares checksums. Progress is streamed
-back to the UI as the script runs.
+On Linux the write runs as a single privileged shell script under `pkexec`: it unmounts
+any mounted partitions, `dd`s the image across, flushes the device's buffer cache, reads
+back exactly as many bytes as the image is long, and compares checksums, streaming
+progress back to the UI as it goes.
+
+On macOS the same sequence happens in-process. `diskutil` unmounts the disk (no privileges
+needed for external media), `authopen` returns the raw device descriptor, and Ferry copies
+the image through it in block-aligned chunks — hashing as it streams, so verification
+costs no second read of the source — then reads the media back and compares. Progress
+comes straight from the byte counter.
 
 ## Safety
 

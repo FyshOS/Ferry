@@ -101,11 +101,11 @@ func TestWriteProgressFraction(t *testing.T) {
 		want float64
 	}{
 		{"write start", WriteProgress{Phase: PhaseWriting, Bytes: 0, Total: total}, 0},
-		{"write half", WriteProgress{Phase: PhaseWriting, Bytes: 500, Total: total}, 1.0 / 3.0},
-		{"write done", WriteProgress{Phase: PhaseWriting, Bytes: total, Total: total}, 2.0 / 3.0},
-		{"syncing", WriteProgress{Phase: PhaseSyncing, Bytes: 0, Total: total}, 2.0 / 3.0},
-		{"verify start", WriteProgress{Phase: PhaseVerifying, Bytes: 0, Total: total}, 2.0 / 3.0},
-		{"verify half", WriteProgress{Phase: PhaseVerifying, Bytes: 500, Total: total}, 5.0 / 6.0},
+		{"write half", WriteProgress{Phase: PhaseWriting, Bytes: 500, Total: total}, writeShare / 2},
+		{"write done", WriteProgress{Phase: PhaseWriting, Bytes: total, Total: total}, writeShare},
+		{"syncing", WriteProgress{Phase: PhaseSyncing, Bytes: 0, Total: total}, writeShare},
+		{"verify start", WriteProgress{Phase: PhaseVerifying, Bytes: 0, Total: total}, writeShare},
+		{"verify half", WriteProgress{Phase: PhaseVerifying, Bytes: 500, Total: total}, writeShare + (1-writeShare)/2},
 		{"verify done", WriteProgress{Phase: PhaseVerifying, Bytes: total, Total: total}, 1},
 		{"ejecting", WriteProgress{Phase: PhaseEjecting, Total: total}, 1},
 		{"done", WriteProgress{Phase: PhaseDone, Bytes: total, Total: total}, 1},
