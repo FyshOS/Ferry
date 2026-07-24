@@ -334,7 +334,7 @@ func (wz *Wizard) showConfirm() {
 	// amd64 image (arm64 ships no usable partition table), and real space left.
 	if free, ok := wz.dataOffer(d); ok {
 		check := widget.NewCheck(
-			fmt.Sprintf("Use the remaining %s as a data partition (exFAT, labelled %q)",
+			fmt.Sprintf("Use the remaining %s for %q partition (exFAT)",
 				disk.FormatSize(free), wz.dataLabel),
 			func(b bool) { wz.wantData = b })
 		check.SetChecked(wz.wantData)
@@ -440,8 +440,8 @@ func (wz *Wizard) showDone(d disk.Disk, res disk.WriteResult) {
 		if label == "" {
 			label = wz.dataLabel
 		}
-		msg = fmt.Sprintf("Your FyshOS USB was written and verified, with a %q data partition "+
-			"for your files.\nIt has been ejected — you can remove it now.", label)
+		msg = fmt.Sprintf("Your FyshOS USB was written and verified, with data partition.\n" +
+			"It has been ejected — you can remove it now.")
 	case disk.DataFailed:
 		// The image is fine; only the extra partition failed. Report it as
 		// information, not an error.
