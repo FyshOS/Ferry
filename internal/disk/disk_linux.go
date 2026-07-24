@@ -9,15 +9,55 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 // DataPartitionSupported reports whether this platform can add the optional
-// exFAT data partition after writing. Only Linux can: its sgdisk/mkfs.exfat
-// reliably extend the image's GPT, whereas macOS's tools refuse the isohybrid
-// images' hybrid MBR.
+// exFAT data partition after writing. Only Linux/amd64 combinations supported.
 func DataPartitionSupported() bool { return true }
+
+// privilegedToolDirs are the directories the up-front tool check searches in
+// addition to Ferry's own PATH. The write runs under pkexec, which resets the
+// environment to a root PATH that includes the sbin directories.
+var privilegedToolDirs = []string{
+	"/usr/local/sbin", "/usr/local/bin",
+	"/usr/sbin", "/usr/bin",
+	"/sbin", "/bin",
+}
+
+// haveTool reports whether any of the named executables is available, looking
+// first on Ferry's PATH and then in the standard system directories the
+// privileged write uses.
+func haveTool(names ...string) bool {
+	for _, n := range names {
+		if _, err := exec.LookPath(n); err == nil {
+			return true
+		}
+		for _, dir := range privilegedToolDirs {
+			if fi, err := os.Stat(filepath.Join(dir, n)); err == nil &&
+				!fi.IsDir() && fi.Mode()&0o111 != 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// MissingDataTools reports which external tools the data-partition step needs
+// but cannot be found, as human-readable names.
+func MissingDataTools() []string {
+	var missing []string
+
+	if !haveTool("sfdisk") {
+		missing = append(missing, "sfdisk (from util-linux)")
+	}
+	if !haveTool("mkfs.exfat", "mkexfatfs") {
+		missing = append(missing, "mkfs.exfat (from exfatprogs)")
+	}
+	return missing
+}
 
 // Enumerate returns the removable USB disks currently attached.
 func Enumerate() ([]Disk, error) {
@@ -40,9 +80,7 @@ func Enumerate() ([]Disk, error) {
 //
 // The data-partition section runs only after the SHA256 line is already on
 // stdout, so the write is verified-good before it starts. It runs in a subshell
-// whose failure is swallowed by "|| echo FERRY-DATA error", so a partitioning
-// problem can neither abort the parent's "set -e" nor skip the eject; it is
-// reported as a warning, never a failed write.
+// whose failure is ignored as this step is optional.
 const writeScript = `
 set -e
 iso="$1"; dev="$2"; size="$3"; label="$4"; mkdata="$5"
@@ -60,27 +98,28 @@ if [ "$mkdata" = "1" ]; then
 	echo "FERRY-PHASE partitioning" >&2
 	(
 		set -e
-		command -v sgdisk >/dev/null 2>&1 || { echo "FERRY-DATA error sgdisk is not installed"; exit 1; }
 		if command -v mkfs.exfat >/dev/null 2>&1; then mkexfat="mkfs.exfat"
 		elif command -v mkexfatfs >/dev/null 2>&1; then mkexfat="mkexfatfs"
 		else echo "FERRY-DATA error no exFAT formatter found (install exfatprogs)"; exit 1; fi
+		command -v sfdisk >/dev/null 2>&1 || { echo "FERRY-DATA error sfdisk is not installed"; exit 1; }
 
-		# Move the backup GPT to the true end of the device; a dd'd isohybrid
-		# leaves it mid-device, which blocks adding any partition past it.
-		sgdisk -e "$dev" >/dev/null 2>&1
-
-		# Next free partition number = highest existing + 1.
-		num=$(sgdisk -p "$dev" 2>/dev/null | awk '/^[[:space:]]*[0-9]+/{n=$1} END{print n+0}')
-		num=$((num + 1))
-
-		# New partition: first aligned free sector to end of disk, type 0700
-		# (Microsoft basic data, which exFAT lives under). Start 0 = next free
-		# aligned sector, so it can never overlap the image region.
-		sgdisk -a 2048 -n ${num}:0:0 -t ${num}:0700 -c ${num}:"$label" "$dev" >/dev/null 2>&1
+		# These images are a hybrid MBR ("dos") disklabel carrying a decorative GPT
+		# whose backup copy is invalid once the image is dd'd onto a larger stick.
+		# Append one primary partition, empty start = first free 1 MiB-aligned sector,
+		# empty size = to the end of the device, type 07 (Microsoft basic data, where
+		# exFAT lives). --append keeps the ISO and ESP entries untouched.
+		if ! err=$(printf ',,7\n' | sfdisk --append --force "$dev" 2>&1 >/dev/null); then
+			echo "FERRY-DATA error sfdisk could not add the partition: $(echo "$err" | tr '\n' ' ')"
+			exit 1
+		fi
 
 		# Re-read the table so the kernel creates the new node.
 		partprobe "$dev" >/dev/null 2>&1 || blockdev --rereadpt "$dev" >/dev/null 2>&1 || partx -u "$dev" >/dev/null 2>&1 || true
 		udevadm settle >/dev/null 2>&1 || true
+
+		# New partition = the highest-numbered entry now in the table.
+		num=$(sfdisk -d "$dev" 2>/dev/null | sed -n "s#^${dev}p\{0,1\}\([0-9]\{1,\}\) .*#\1#p" | sort -n | tail -1)
+		[ -n "$num" ] || { echo "FERRY-DATA error could not determine the new partition number"; exit 1; }
 
 		case "$dev" in
 			*[0-9]) part="${dev}p${num}" ;;

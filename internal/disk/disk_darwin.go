@@ -388,6 +388,10 @@ func Write(ctx context.Context, isoPath string, d Disk, opts WriteOptions, onPro
 // to add a partition to either. The feature is offered only on Linux.
 func DataPartitionSupported() bool { return false }
 
+// MissingDataTools reports the tools the data-partition step is missing. macOS
+// never offers the step (see DataPartitionSupported), so nothing is ever needed.
+func MissingDataTools() []string { return nil }
+
 // benignSyncError reports whether a failed flush can be ignored. Writes to a
 // raw device go straight to the media rather than through the buffer cache, so
 // there is nothing to flush and fsync is simply not implemented for it: macOS

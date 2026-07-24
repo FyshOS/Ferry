@@ -15,6 +15,10 @@ var errUnsupported = errors.New("writing USB media is only supported on Linux an
 // exFAT data partition. Unsupported platforms cannot.
 func DataPartitionSupported() bool { return false }
 
+// MissingDataTools reports the tools the data-partition step is missing.
+// Unsupported platforms never offer the step, so nothing is ever needed.
+func MissingDataTools() []string { return nil }
+
 // Enumerate is unsupported on this platform.
 func Enumerate() ([]Disk, error) { return nil, errUnsupported }
 

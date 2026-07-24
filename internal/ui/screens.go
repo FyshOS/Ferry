@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -323,7 +324,7 @@ func (wz *Wizard) showConfirm() {
 	warn.Alignment = fyne.TextAlignCenter
 
 	create := widget.NewButtonWithIcon("Erase & Create", theme.MediaPlayIcon(), func() {
-		wz.startWrite(d)
+		wz.confirmWrite(d)
 	})
 	create.Importance = widget.HighImportance
 
@@ -350,10 +351,46 @@ func (wz *Wizard) showConfirm() {
 		"Ready to go", "Check the details, then create your USB", body, footer)
 }
 
-// startWrite writes the image and moves to the done screen on success. Writing
-// is deliberately not cancellable: once the stick is being erased there is no
-// safe midpoint to stop at.
-func (wz *Wizard) startWrite(d disk.Disk) {
+// confirmWrite is the gate between the confirm screen and the write. When a data
+// partition was asked for, it checks up front that the host has the tools to make one.
+// They can carry on without it or go back and install the tools.
+func (wz *Wizard) confirmWrite(d disk.Disk) {
+	_, canData := wz.dataOffer(d)
+	withData := canData && wz.wantData
+	if withData {
+		if missing := disk.MissingDataTools(); len(missing) > 0 {
+			wz.warnDataTools(d, missing)
+			return
+		}
+	}
+	wz.startWrite(d, withData)
+}
+
+// warnDataTools tells the user the data-partition tools are missing and lets
+// them either continue without the partition or go back to install them.
+func (wz *Wizard) warnDataTools(d disk.Disk, missing []string) {
+	list := "- " + strings.Join(missing, "\n- ")
+	body := widget.NewRichTextFromMarkdown(fmt.Sprintf(
+		"The data partition can’t be created on this computer — these tools are "+
+			"not installed:\n\n%s\n\nYou can create the USB **without** the data "+
+			"partition (the image is still written and verified), or go back, "+
+			"install them, and try again.", list))
+	body.Wrapping = fyne.TextWrapWord
+
+	dlg := dialog.NewCustomConfirm("Data partition tools missing",
+		"Continue without data", "Go back", body, func(cont bool) {
+			if cont {
+				wz.startWrite(d, false)
+			}
+			// "Go back" just dismisses the dialog, leaving the confirm screen up.
+		}, wz.win)
+	dlg.Resize(fyne.NewSize(400, 260))
+	dlg.Show()
+}
+
+// startWrite writes the image and moves to the done screen on success. withData
+// asks for the exFAT data partition in the leftover space.
+func (wz *Wizard) startWrite(d disk.Disk, withData bool) {
 	bar := widget.NewProgressBar()
 	status := widget.NewLabelWithStyle("Preparing…", fyne.TextAlignCenter, fyne.TextStyle{})
 	note := canvas.NewText("Please leave the USB stick plugged in.", theme.Color(theme.ColorNamePlaceHolder))
@@ -363,8 +400,7 @@ func (wz *Wizard) startWrite(d disk.Disk) {
 	wz.show(screenWriting, theme.MediaPlayIcon(),
 		"Creating your USB", diskName(d), body, nil)
 
-	_, canData := wz.dataOffer(d)
-	opts := disk.WriteOptions{DataPartition: canData && wz.wantData, DataLabel: wz.dataLabel}
+	opts := disk.WriteOptions{DataPartition: withData, DataLabel: wz.dataLabel}
 	go func() {
 		res, err := disk.Write(context.Background(), wz.selPath, d, opts, func(p disk.WriteProgress) {
 			fyne.Do(func() {
