@@ -78,6 +78,10 @@ func parseWriteProgress(r io.Reader, size int64, report func(WriteProgress)) []s
 				phase = PhaseSyncing
 			case "verifying":
 				phase = PhaseVerifying
+			case "partitioning":
+				phase = PhasePartitioning
+			case "formatting":
+				phase = PhaseFormatting
 			case "ejecting":
 				phase = PhaseEjecting
 			default:
@@ -107,7 +111,8 @@ func parseWriteProgress(r io.Reader, size int64, report func(WriteProgress)) []s
 
 		// Anything else is the script or dd explaining itself, most usefully
 		// when something has gone wrong.
-		if ddRecords.MatchString(line) || shaLine.MatchString(line) {
+		if ddRecords.MatchString(line) || shaLine.MatchString(line) ||
+			strings.HasPrefix(line, dataMarker) {
 			continue
 		}
 		if len(diags) < diagLimit {
@@ -143,6 +148,18 @@ func scriptError(diags []string) string {
 	default:
 		return strings.Join(detail, "; ")
 	}
+}
+
+// partitionNode returns the device node of partition number num on the whole
+// device dev. Devices whose name ends in a digit take a "p" separator
+// (/dev/nvme0n1 -> /dev/nvme0n1p3, /dev/mmcblk0 -> /dev/mmcblk0p2); the rest are
+// suffixed directly (/dev/sdb -> /dev/sdb3).
+func partitionNode(dev string, num int) string {
+	sep := ""
+	if n := len(dev); n > 0 && dev[n-1] >= '0' && dev[n-1] <= '9' {
+		sep = "p"
+	}
+	return dev + sep + strconv.Itoa(num)
 }
 
 // scanCROrLF is a bufio.SplitFunc that breaks on either CR or LF, so we can read

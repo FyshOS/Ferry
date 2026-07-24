@@ -293,6 +293,18 @@ func diskName(d disk.Disk) string {
 
 // ---- step 4: confirm & write ----
 
+// dataOffer decides whether to offer a data partition for this device and, if
+// so, how much free space it would use. It is gated on the platform supporting
+// the step, the image being amd64 (the arm64 images ship no usable partition
+// table to extend), and the stick having real space left beyond the image.
+func (wz *Wizard) dataOffer(d disk.Disk) (free int64, ok bool) {
+	if !disk.DataPartitionSupported() || wz.arch != releases.ArchAMD64 {
+		return 0, false
+	}
+	free = disk.DataFreeBytes(d.Size, wz.selSize)
+	return free, free > 0
+}
+
 // showConfirm summarises the choices and offers the point-of-no-return button.
 func (wz *Wizard) showConfirm() {
 	if wz.selPath == "" || wz.selDisk == nil {
@@ -315,7 +327,24 @@ func (wz *Wizard) showConfirm() {
 	})
 	create.Importance = widget.HighImportance
 
-	body := container.NewVBox(summary, widget.NewSeparator(), warn)
+	items := []fyne.CanvasObject{summary, widget.NewSeparator()}
+
+	// Offer a data partition only when it is possible: a supported platform, an
+	// amd64 image (arm64 ships no usable partition table), and real space left.
+	if free, ok := wz.dataOffer(d); ok {
+		check := widget.NewCheck(
+			fmt.Sprintf("Use the remaining %s as a data partition (exFAT, labelled %q)",
+				disk.FormatSize(free), wz.dataLabel),
+			func(b bool) { wz.wantData = b })
+		check.SetChecked(wz.wantData)
+		note := canvas.NewText("Keeps files across reboots, readable on Linux, macOS and Windows.",
+			theme.Color(theme.ColorNamePlaceHolder))
+		note.TextSize = 12
+		items = append(items, check, note, widget.NewSeparator())
+	}
+
+	items = append(items, warn)
+	body := container.NewVBox(items...)
 	footer := footerNav(backButton(wz.showDisk), create)
 	wz.show(screenConfirm, theme.WarningIcon(),
 		"Ready to go", "Check the details, then create your USB", body, footer)
@@ -334,8 +363,10 @@ func (wz *Wizard) startWrite(d disk.Disk) {
 	wz.show(screenWriting, theme.MediaPlayIcon(),
 		"Creating your USB", diskName(d), body, nil)
 
+	_, canData := wz.dataOffer(d)
+	opts := disk.WriteOptions{DataPartition: canData && wz.wantData, DataLabel: wz.dataLabel}
 	go func() {
-		err := disk.Write(context.Background(), wz.selPath, d, func(p disk.WriteProgress) {
+		res, err := disk.Write(context.Background(), wz.selPath, d, opts, func(p disk.WriteProgress) {
 			fyne.Do(func() {
 				// One continuous bar across the whole job, so 100% means the
 				// image is written *and* verified rather than filling twice.
@@ -356,18 +387,38 @@ func (wz *Wizard) startWrite(d disk.Disk) {
 				wz.showConfirm()
 				return
 			}
-			wz.showDone(d)
+			wz.showDone(d, res)
 		})
 	}()
 }
 
 // ---- done ----
 
-// showDone celebrates success and offers to make another or finish.
-func (wz *Wizard) showDone(d disk.Disk) {
+// showDone celebrates success and offers to make another or finish. The image
+// write always succeeded here; the data partition may or may not have.
+func (wz *Wizard) showDone(d disk.Disk, res disk.WriteResult) {
+	msg := "Your FyshOS USB was written and verified.\nIt has been ejected — you can remove it now."
+	switch res.Data {
+	case disk.DataCreated:
+		label := res.DataLabel
+		if label == "" {
+			label = wz.dataLabel
+		}
+		msg = fmt.Sprintf("Your FyshOS USB was written and verified, with a %q data partition "+
+			"for your files.\nIt has been ejected — you can remove it now.", label)
+	case disk.DataFailed:
+		// The image is fine; only the extra partition failed. Report it as
+		// information, not an error.
+		reason := res.DataWarn
+		if reason == "" {
+			reason = "the data partition could not be created"
+		}
+		dialog.ShowInformation("Data partition not created",
+			"Your FyshOS USB was written and verified successfully.\n\n"+
+				"The optional data partition was not created: "+reason+".", wz.win)
+	}
 	body := container.NewCenter(widget.NewLabelWithStyle(
-		"Your FyshOS USB was written and verified.\nIt has been ejected — you can remove it now.",
-		fyne.TextAlignCenter, fyne.TextStyle{}))
+		msg, fyne.TextAlignCenter, fyne.TextStyle{}))
 
 	again := widget.NewButtonWithIcon("Make another", theme.ViewRefreshIcon(), func() {
 		wz.reset()

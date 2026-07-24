@@ -242,17 +242,21 @@ func authopenDevice(ctx context.Context, path string) (*os.File, error) {
 // Write copies isoPath onto the disk, verifies the result and ejects the media.
 // It asks for authorization through the system dialog; Ferry itself stays
 // unprivileged. Progress is reported through the optional callback.
-func Write(ctx context.Context, isoPath string, d Disk, onProgress func(WriteProgress)) error {
+//
+// opts.DataPartition is accepted for signature parity but ignored: macOS cannot
+// add the data partition (see DataPartitionSupported), and the UI never offers
+// it here, so the returned WriteResult always reports DataSkipped.
+func Write(ctx context.Context, isoPath string, d Disk, opts WriteOptions, onProgress func(WriteProgress)) (WriteResult, error) {
 	info, err := os.Stat(isoPath)
 	if err != nil {
-		return fmt.Errorf("reading image: %w", err)
+		return WriteResult{}, fmt.Errorf("reading image: %w", err)
 	}
 	size := info.Size()
 	if size <= 0 {
-		return fmt.Errorf("image %q is empty", isoPath)
+		return WriteResult{}, fmt.Errorf("image %q is empty", isoPath)
 	}
 	if d.Size < size {
-		return fmt.Errorf("device %s (%s) is too small for the image (%s)",
+		return WriteResult{}, fmt.Errorf("device %s (%s) is too small for the image (%s)",
 			d.Path, FormatSize(d.Size), FormatSize(size))
 	}
 
@@ -264,7 +268,7 @@ func Write(ctx context.Context, isoPath string, d Disk, onProgress func(WritePro
 
 	src, err := os.Open(isoPath)
 	if err != nil {
-		return fmt.Errorf("reading image: %w", err)
+		return WriteResult{}, fmt.Errorf("reading image: %w", err)
 	}
 	defer src.Close()
 
@@ -272,12 +276,12 @@ func Write(ctx context.Context, isoPath string, d Disk, onProgress func(WritePro
 	// This needs no privileges for an external disk.
 	if out, err := exec.CommandContext(ctx, "diskutil", "unmountDisk", "force", d.Path).
 		CombinedOutput(); err != nil {
-		return fmt.Errorf("could not unmount %s: %s", d.Path, strings.TrimSpace(string(out)))
+		return WriteResult{}, fmt.Errorf("could not unmount %s: %s", d.Path, strings.TrimSpace(string(out)))
 	}
 
 	dev, err := authopenDevice(ctx, rawDevicePath(d.Path))
 	if err != nil {
-		return err
+		return WriteResult{}, err
 	}
 	defer dev.Close()
 
@@ -293,10 +297,10 @@ func Write(ctx context.Context, isoPath string, d Disk, onProgress func(WritePro
 			if rerr == io.EOF {
 				break
 			}
-			return fmt.Errorf("reading image: %w", rerr)
+			return WriteResult{}, fmt.Errorf("reading image: %w", rerr)
 		}
 		if rerr != nil && rerr != io.EOF && rerr != io.ErrUnexpectedEOF {
-			return fmt.Errorf("reading image: %w", rerr)
+			return WriteResult{}, fmt.Errorf("reading image: %w", rerr)
 		}
 		srcHash.Write(buf[:n])
 
@@ -312,30 +316,30 @@ func Write(ctx context.Context, isoPath string, d Disk, onProgress func(WritePro
 			out += pad
 		}
 		if _, werr := dev.Write(buf[:out]); werr != nil {
-			return fmt.Errorf("writing to %s: %w", d.Path, writeHint(werr))
+			return WriteResult{}, fmt.Errorf("writing to %s: %w", d.Path, writeHint(werr))
 		}
 
 		written += int64(n)
 		report(WriteProgress{Phase: PhaseWriting, Bytes: written, Total: size})
 
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return WriteResult{}, ctx.Err()
 		}
 	}
 	if written < size {
-		return fmt.Errorf("image ended after %s of %s", FormatSize(written), FormatSize(size))
+		return WriteResult{}, fmt.Errorf("image ended after %s of %s", FormatSize(written), FormatSize(size))
 	}
 
 	report(WriteProgress{Phase: PhaseSyncing, Bytes: 0, Total: size})
 	if err := dev.Sync(); err != nil && !benignSyncError(err) {
-		return fmt.Errorf("flushing %s: %w", d.Path, err)
+		return WriteResult{}, fmt.Errorf("flushing %s: %w", d.Path, err)
 	}
 
 	// Read the image back off the media and compare. The raw device is
 	// uncached, so this reads what was actually stored.
 	report(WriteProgress{Phase: PhaseVerifying, Bytes: 0, Total: size})
 	if _, err := dev.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("rewinding %s: %w", d.Path, err)
+		return WriteResult{}, fmt.Errorf("rewinding %s: %w", d.Path, err)
 	}
 	devHash := sha256.New()
 	var read int64
@@ -351,28 +355,38 @@ func Write(ctx context.Context, isoPath string, d Disk, onProgress func(WritePro
 			report(WriteProgress{Phase: PhaseVerifying, Bytes: read, Total: size})
 		}
 		if rerr != nil {
-			return fmt.Errorf("reading back from %s: %w", d.Path, rerr)
+			return WriteResult{}, fmt.Errorf("reading back from %s: %w", d.Path, rerr)
 		}
 		if n == 0 {
-			return fmt.Errorf("reading back from %s stopped at %s of %s",
+			return WriteResult{}, fmt.Errorf("reading back from %s stopped at %s of %s",
 				d.Path, FormatSize(read), FormatSize(size))
 		}
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return WriteResult{}, ctx.Err()
 		}
 	}
 	if hex.EncodeToString(devHash.Sum(nil)) != hex.EncodeToString(srcHash.Sum(nil)) {
-		return ErrVerifyMismatch
+		return WriteResult{}, ErrVerifyMismatch
 	}
 
-	report(WriteProgress{Phase: PhaseEjecting, Bytes: 0, Total: size})
+	// The image is verified. macOS cannot add the data partition (see
+	// DataPartitionSupported), so opts.DataPartition is never set here; the write
+	// simply finishes and ejects.
 	dev.Close()
+
+	report(WriteProgress{Phase: PhaseEjecting, Bytes: 0, Total: size})
 	// A failure to eject does not make the write any less valid.
 	_ = exec.CommandContext(ctx, "diskutil", "eject", d.Path).Run()
 
 	report(WriteProgress{Phase: PhaseDone, Bytes: size, Total: size})
-	return nil
+	return WriteResult{}, nil
 }
+
+// DataPartitionSupported reports whether this platform can add the optional
+// exFAT data partition. macOS cannot: the isohybrid images present a hybrid MBR
+// (amd64) or no partition table at all (arm64), and macOS's gpt/diskutil refuse
+// to add a partition to either. The feature is offered only on Linux.
+func DataPartitionSupported() bool { return false }
 
 // benignSyncError reports whether a failed flush can be ignored. Writes to a
 // raw device go straight to the media rather than through the buffer cache, so

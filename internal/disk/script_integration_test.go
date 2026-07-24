@@ -43,8 +43,10 @@ func TestWriteScriptEndToEnd(t *testing.T) {
 	want := hex.EncodeToString(sum[:])
 	size := int64(len(data))
 
+	// mkdata "0": exercise the data-partition argument contract without asking
+	// the script to partition a plain file standing in for a device.
 	cmd := exec.Command("/bin/sh", "-c", writeScript,
-		"sh", iso, dev, strconv.FormatInt(size, 10))
+		"sh", iso, dev, strconv.FormatInt(size, 10), "Data", "0")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)

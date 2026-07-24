@@ -9,20 +9,30 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // Phase names reported through WriteProgress.
 const (
-	PhaseWriting   = "Writing image"
-	PhaseSyncing   = "Flushing buffers"
-	PhaseVerifying = "Verifying"
-	PhaseEjecting  = "Ejecting"
-	PhaseDone      = "Complete"
+	PhaseWriting      = "Writing image"
+	PhaseSyncing      = "Flushing buffers"
+	PhaseVerifying    = "Verifying"
+	PhasePartitioning = "Creating data partition"
+	PhaseFormatting   = "Formatting data partition"
+	PhaseEjecting     = "Ejecting"
+	PhaseDone         = "Complete"
 )
 
-// writeShare is how much of the overall job the write accounts for; the
-// read-back verify makes up the rest.
-const writeShare = 3.0 / 4.0
+// The write phases divide the overall progress bar between them. Writing and
+// verifying stream real byte counts and so carry the bulk; the optional data
+// partition steps report no byte stream and rest at their floor. The shares sum
+// to just under 1 so ejecting can complete the bar.
+const (
+	writeShare  = 0.72 // writing fills [0, 0.72]
+	verifyShare = 0.20 // verifying fills [0.72, 0.92]
+	partShare   = 0.02 // partitioning fills [0.92, 0.94]
+	formatShare = 0.05 // formatting fills [0.94, 0.99]
+)
 
 // WriteProgress reports progress of a write operation. Bytes/Total give the
 // byte-level progress within the current phase.
@@ -47,7 +57,12 @@ func (p WriteProgress) Fraction() float64 {
 		// Writing is done but the verify has not started.
 		return writeShare
 	case PhaseVerifying:
-		return writeShare + within*(1-writeShare)
+		return writeShare + within*verifyShare
+	case PhasePartitioning:
+		// No byte stream, so this rests at the end of the verify share.
+		return writeShare + verifyShare + within*partShare
+	case PhaseFormatting:
+		return writeShare + verifyShare + partShare + within*formatShare
 	case PhaseEjecting, PhaseDone:
 		return 1
 	}
@@ -57,6 +72,115 @@ func (p WriteProgress) Fraction() float64 {
 // ErrVerifyMismatch is returned when the data read back from the device does
 // not match the source image, meaning the media is not a reliable copy.
 var ErrVerifyMismatch = errors.New("verification failed: written data does not match the image")
+
+// DefaultDataLabel is the exFAT volume label given to the optional data
+// partition. It is the only contract between Ferry and the booted FyshOS, which
+// finds the partition via /dev/disk/by-label/<label>.
+const DefaultDataLabel = "Data"
+
+const (
+	// dataAlign is the boundary the data partition starts on, one mebibyte, so
+	// it stays clear of the image and lands on an efficient offset.
+	dataAlign = 1 << 20
+	// minDataPartition is the smallest leftover worth offering as a data
+	// partition; below this the feature is skipped.
+	minDataPartition = 1 << 30 // 1 GiB
+	// gptTailReserve leaves room for the backup GPT (33 sectors) that sgdisk/gpt
+	// relocate to the end of the device, plus a sector of slack.
+	gptTailReserve = 34 * 512
+)
+
+// DataFreeBytes reports how much space a data partition could claim on a device
+// of devSize once an image of imageSize has been written, or 0 when too little
+// would remain to be worth it. The partition starts aligned one mebibyte past
+// the actual image end (not a fixed reservation: some images exceed 2 GiB) and
+// runs to the end of the device, less the backup GPT tail.
+func DataFreeBytes(devSize, imageSize int64) int64 {
+	if imageSize <= 0 || devSize <= 0 {
+		return 0
+	}
+	start := (imageSize + dataAlign - 1) / dataAlign * dataAlign
+	free := devSize - start - gptTailReserve
+	if free < minDataPartition {
+		return 0
+	}
+	return free
+}
+
+// WriteOptions carries the caller's choices for a write beyond the image and
+// device themselves.
+type WriteOptions struct {
+	// DataPartition asks Ferry to add an exFAT data partition in the free space
+	// after the image, once the image has been written and verified.
+	DataPartition bool
+	// DataLabel is the volume label for that partition; empty means
+	// DefaultDataLabel.
+	DataLabel string
+}
+
+// label returns the data-partition label to use, applying the default.
+func (o WriteOptions) label() string {
+	if o.DataLabel == "" {
+		return DefaultDataLabel
+	}
+	return o.DataLabel
+}
+
+// DataStatus reports what became of the optional data partition.
+type DataStatus int
+
+const (
+	// DataSkipped means no data partition was requested or there was no room.
+	DataSkipped DataStatus = iota
+	// DataCreated means the partition was created and formatted successfully.
+	DataCreated
+	// DataFailed means the partition step failed. The image write still
+	// succeeded and is verified good; this is reported as a warning, not an
+	// error.
+	DataFailed
+)
+
+// WriteResult reports the outcome of the optional data-partition step. The image
+// write itself succeeded whenever Write returns a nil error, regardless of Data.
+type WriteResult struct {
+	Data      DataStatus
+	DataNode  string // device node of the new partition, when created
+	DataLabel string // the label it was given, when created
+	DataWarn  string // human-readable reason, when DataFailed
+}
+
+// dataMarker prefixes the data-partition result the privileged step reports on
+// stdout. Both platforms emit it and share parseDataResult.
+const dataMarker = "FERRY-DATA "
+
+// parseDataResult interprets a FERRY-DATA result line from the privileged step's
+// stdout. The line is one of:
+//
+//	FERRY-DATA created <node> <label>
+//	FERRY-DATA skipped <reason...>
+//	FERRY-DATA error <message...>
+//
+// For "created", node and detail hold the partition node and its label; for the
+// others detail holds the reason. ok is false for any line that is not a
+// data-result line.
+func parseDataResult(line string) (status DataStatus, node, detail string, ok bool) {
+	rest, found := strings.CutPrefix(strings.TrimSpace(line), dataMarker)
+	if !found {
+		return 0, "", "", false
+	}
+	verb, args, _ := strings.Cut(rest, " ")
+	args = strings.TrimSpace(args)
+	switch verb {
+	case "created":
+		node, label, _ := strings.Cut(args, " ")
+		return DataCreated, node, strings.TrimSpace(label), true
+	case "skipped":
+		return DataSkipped, "", args, true
+	case "error":
+		return DataFailed, "", args, true
+	}
+	return 0, "", "", false
+}
 
 // Disk describes a whole block device that could be a USB target.
 type Disk struct {

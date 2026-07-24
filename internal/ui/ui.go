@@ -80,6 +80,10 @@ type Wizard struct {
 	disks   []disk.Disk
 	selDisk *disk.Disk
 
+	// data partition options, chosen on the confirm screen
+	wantData  bool   // add an exFAT data partition in the leftover space
+	dataLabel string // its volume label
+
 	current screen
 	body    *fyne.Container // the swappable screen content
 }
@@ -87,12 +91,14 @@ type Wizard struct {
 // NewWizard creates a wizard bound to the given app, window and brand icon.
 func NewWizard(app fyne.App, win fyne.Window, icon fyne.Resource) *Wizard {
 	wz := &Wizard{
-		app:     app,
-		win:     win,
-		icon:    icon,
-		rel:     &releases.Client{},
-		arch:    releases.HostArch(),
-		loading: true,
+		app:       app,
+		win:       win,
+		icon:      icon,
+		rel:       &releases.Client{},
+		arch:      releases.HostArch(),
+		loading:   true,
+		wantData:  true, // offered pre-ticked when the stick has room
+		dataLabel: disk.DefaultDataLabel,
 	}
 	if cch, err := cache.New(app); err == nil {
 		wz.cch = cch
@@ -209,4 +215,6 @@ func (wz *Wizard) setImage(path, name string, size int64) {
 func (wz *Wizard) reset() {
 	wz.selPath, wz.selName, wz.selSize = "", "", 0
 	wz.selDisk = nil
+	wz.wantData = true
+	wz.dataLabel = disk.DefaultDataLabel
 }

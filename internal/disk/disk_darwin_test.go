@@ -204,7 +204,7 @@ func TestWriteRejectsOversizedImage(t *testing.T) {
 	if err := os.WriteFile(iso, make([]byte, 4096), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := Write(context.Background(), iso, Disk{Path: "/dev/disk99", Size: 1024}, nil)
+	_, err := Write(context.Background(), iso, Disk{Path: "/dev/disk99", Size: 1024}, WriteOptions{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "too small") {
 		t.Errorf("expected a too-small error, got %v", err)
 	}
@@ -216,9 +216,15 @@ func TestWriteRejectsEmptyImage(t *testing.T) {
 	if err := os.WriteFile(iso, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := Write(context.Background(), iso, Disk{Path: "/dev/disk99", Size: 1 << 20}, nil)
+	_, err := Write(context.Background(), iso, Disk{Path: "/dev/disk99", Size: 1 << 20}, WriteOptions{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Errorf("expected an empty-image error, got %v", err)
+	}
+}
+
+func TestDataPartitionUnsupportedOnDarwin(t *testing.T) {
+	if DataPartitionSupported() {
+		t.Error("macOS cannot add the data partition; DataPartitionSupported must be false")
 	}
 }
 

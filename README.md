@@ -14,6 +14,10 @@ the latest FyshOS image and writes it to a USB stick, verifying the result and c
 - **Writes any ISO**, not just FyshOS, if you already have one on disk.
 - **Verifies after writing.** Ferry reads the device back and compares its SHA-256
   against the source image, so a bad stick is reported rather than discovered at boot.
+- **Turns the leftover space into storage.** When writing an **amd64** image **on Linux**
+  to a stick with room to spare, Ferry can add an exFAT **data partition** (labelled
+  `Data`) in the free space after the image, so your files persist across reboots and are
+  readable on Linux, macOS and Windows.
 
 ## Installing
 
@@ -45,7 +49,11 @@ Ferry shells out to a few standard utilities, all present on a typical desktop i
 | requesting administrator rights | `pkexec` | `authopen` |
 | writing and flushing | `dd`, `sync`, `blockdev` | done in-process |
 | verifying | `sha256sum` | done in-process |
+| data partition (optional, Linux only) | `sgdisk`, `mkfs.exfat` | — |
 | finishing up | `eject` or `udisksctl` | `diskutil eject` |
+
+The data-partition step is optional, so its tools are only needed if you ask for one.
+Install `gdisk` (for `sgdisk`) and `exfatprogs` (for `mkfs.exfat`) if they are missing.
 
 On Linux, `pkexec` needs a polkit authentication agent running in your desktop session.
 Most desktops start one automatically; if the authorisation prompt never appears, that
@@ -62,6 +70,8 @@ Ferry is a four step wizard:
 2. **Image** — download the latest FyshOS, pick one you already have, or open any `.iso`.
 3. **Device** — choose from the removable drives Ferry found.
 4. **Confirm & write** — a last look before anything is overwritten, then write and verify.
+   When the stick has space to spare, this step also offers to turn the remainder into an
+   exFAT data partition.
 
 Downloads land in the application cache directory and are written to a `.part` file that
 is only renamed into place on success, so an interrupted download never masquerades as a
@@ -77,6 +87,13 @@ needed for external media), `authopen` returns the raw device descriptor, and Fe
 the image through it in block-aligned chunks — hashing as it streams, so verification
 costs no second read of the source — then reads the media back and compares. Progress
 comes straight from the byte counter.
+
+The optional data partition is always added **after** the image is written and verified,
+so it can never put a good write at risk: if anything about the partition step fails, Ferry
+reports it as a warning and the verified FyshOS image still ships. The image is written to
+the whole device first — that lays down its own partition table — and the data partition is
+then appended into the free space that follows it (`sgdisk` to add the partition,
+`mkfs.exfat` to format it), all folded into the same privileged step as the write.
 
 ## Safety
 

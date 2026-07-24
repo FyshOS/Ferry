@@ -158,6 +158,66 @@ func TestScriptErrorBareOutput(t *testing.T) {
 	}
 }
 
+// The optional data-partition stages must be recognised and each announced with
+// a reset count, like the write and verify stages.
+func TestParseWriteProgressDataPhases(t *testing.T) {
+	const size = 1000
+	stream := "FERRY-PHASE verifying\n" +
+		"\r1000 bytes (1000 B) copied, 2 s, 500 B/s\n" +
+		"FERRY-PHASE partitioning\n" +
+		"FERRY-PHASE formatting\n" +
+		"FERRY-PHASE ejecting\n"
+
+	var got []WriteProgress
+	parseWriteProgress(strings.NewReader(stream), size, func(p WriteProgress) {
+		got = append(got, p)
+	})
+	for _, phase := range []string{PhasePartitioning, PhaseFormatting} {
+		found := false
+		for _, p := range got {
+			if p.Phase == phase && p.Bytes == 0 {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("phase %q never reported with a reset (Bytes==0)", phase)
+		}
+	}
+}
+
+// FERRY-DATA result lines arrive on stdout, but even if one reaches the stderr
+// parser it must be treated as a result, not a diagnostic.
+func TestDataMarkersNotDiagnostics(t *testing.T) {
+	stream := "FERRY-PHASE partitioning\n" +
+		"FERRY-DATA created /dev/sdb3 Data\n" +
+		"FERRY-PHASE ejecting\n"
+	diags := parseWriteProgress(strings.NewReader(stream), 1000, func(WriteProgress) {})
+	for _, d := range diags {
+		if strings.HasPrefix(d, dataMarker) {
+			t.Errorf("data line leaked into diagnostics: %q", d)
+		}
+	}
+}
+
+func TestPartitionNode(t *testing.T) {
+	cases := []struct {
+		dev  string
+		num  int
+		want string
+	}{
+		{"/dev/sdb", 3, "/dev/sdb3"},
+		{"/dev/sda", 1, "/dev/sda1"},
+		{"/dev/nvme0n1", 3, "/dev/nvme0n1p3"},
+		{"/dev/mmcblk0", 2, "/dev/mmcblk0p2"},
+	}
+	for _, tc := range cases {
+		if got := partitionNode(tc.dev, tc.num); got != tc.want {
+			t.Errorf("partitionNode(%q, %d) = %q, want %q", tc.dev, tc.num, got, tc.want)
+		}
+	}
+}
+
 // Progress and checksum lines are not diagnostics and must not leak into an
 // error message.
 func TestParseWriteProgressSeparatesDiagnostics(t *testing.T) {
