@@ -53,6 +53,9 @@ func (wz *Wizard) showArch() {
 	for i, a := range releases.Arches {
 		i, a := i, a
 		rows[i] = newOptionRow(theme.ComputerIcon(), a.Label(), descs[a], func() {
+			if a != wz.arch {
+				wz.clearImage()
+			}
 			wz.arch = a
 			update()
 		})
@@ -457,8 +460,8 @@ func (wz *Wizard) showDone(d disk.Disk, res disk.WriteResult) {
 		msg, fyne.TextAlignCenter, fyne.TextStyle{}))
 
 	again := widget.NewButtonWithIcon("Make another", theme.ViewRefreshIcon(), func() {
-		wz.reset()
-		wz.showArch()
+		wz.selDisk = nil
+		wz.showDisk()
 	})
 	again.Importance = widget.LowImportance
 	finish := widget.NewButtonWithIcon("Finish", theme.ConfirmIcon(), func() {

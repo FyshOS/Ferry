@@ -210,11 +210,8 @@ func (wz *Wizard) setImage(path, name string, size int64) {
 	wz.selSize = size
 }
 
-// reset clears the per-run selections (keeping the chosen architecture) so the
-// user can make another stick.
-func (wz *Wizard) reset() {
+// clearImage forgets the chosen image, e.g. when it no longer suits the chosen
+// architecture.
+func (wz *Wizard) clearImage() {
 	wz.selPath, wz.selName, wz.selSize = "", "", 0
-	wz.selDisk = nil
-	wz.wantData = true
-	wz.dataLabel = disk.DefaultDataLabel
 }
